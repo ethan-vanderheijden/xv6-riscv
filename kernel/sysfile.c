@@ -65,9 +65,12 @@ sys_dup(void)
   return fd;
 }
 
+int reads = 0;
+
 uint64
 sys_read(void)
 {
+  reads++;
   struct file *f;
   int n;
   uint64 p;
@@ -77,6 +80,12 @@ sys_read(void)
   if(argfd(0, 0, &f) < 0)
     return -1;
   return fileread(f, p, n);
+}
+
+uint64
+sys_count_reads(void)
+{
+  return reads;
 }
 
 uint64
