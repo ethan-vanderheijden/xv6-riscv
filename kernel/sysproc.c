@@ -91,3 +91,24 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_set_tickets(void)
+{
+    int n;
+    argint(0, &n);
+    if (n <= 0) {
+        return -1;
+    } else {
+        myproc()->tickets = n;
+        return 0;
+    }
+}
+
+uint64
+sys_get_proc_info(void)
+{
+    uint64 pstat_addr;
+    argaddr(0, &pstat_addr);
+    return fill_proc_info(pstat_addr);
+}

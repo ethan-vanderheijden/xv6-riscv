@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "pstat.h"
 
 struct cpu cpus[NCPU];
 
@@ -124,6 +125,8 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->ticks = 0;
+  p->tickets = 1;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -169,6 +172,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->ticks = 0;
+  p->tickets = 1;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -309,6 +314,8 @@ fork(void)
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
+
+  np->tickets = p->tickets;
 
   pid = np->pid;
 
@@ -462,6 +469,7 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
+        p->ticks++;
         c->proc = p;
         swtch(&c->context, &p->context);
 
@@ -692,4 +700,24 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+fill_proc_info(uint64 addr) {
+    struct pstat stat;
+    for (int i = 0; i < NPROC; i++) {
+        struct proc *p = &proc[i];
+        if (p->state != UNUSED) {
+            stat.inuse[i] = 1;
+            stat.tickets[i] = p->tickets;
+            stat.pid[i] = p->pid;
+            stat.ticks[i] = p->ticks;
+        } else {
+            stat.inuse[i] = 0;
+            stat.tickets[i] = 0;
+            stat.pid[i] = 0;
+            stat.ticks[i] = 0;
+        }
+    }
+    return either_copyout(1, addr, &stat, sizeof(stat));
 }

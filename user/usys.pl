@@ -36,3 +36,6 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+entry("count_reads");
+entry("set_tickets");
+entry("get_proc_info");
