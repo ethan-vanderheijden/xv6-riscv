@@ -6,12 +6,15 @@
 #include "proc.h"
 #include "defs.h"
 #include "pstat.h"
+#include "common/rand.c"
 
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
 struct proc *initproc;
+
+struct spinlock ticket_lock;
 
 int nextpid = 1;
 struct spinlock pid_lock;
@@ -50,6 +53,7 @@ procinit(void)
 {
   struct proc *p;
   
+  initlock(&ticket_lock, "ticket_lock");
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
@@ -126,7 +130,6 @@ found:
   p->pid = allocpid();
   p->state = USED;
   p->ticks = 0;
-  p->tickets = 1;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -253,6 +256,8 @@ userinit(void)
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
+
+  p->tickets = 10;
 
   p->state = RUNNABLE;
 
@@ -461,29 +466,53 @@ scheduler(void)
     // processes are waiting.
     intr_on();
 
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        p->ticks++;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    acquire(&ticket_lock);
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+    int active_tickets = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      if (p->state == RUNNABLE) {
+        active_tickets += p->tickets;
       }
-      release(&p->lock);
     }
-    if(found == 0) {
+
+    if (active_tickets == 0) {
+      release(&ticket_lock);
       // nothing to run; stop running on this core until an interrupt.
-      intr_on();
       asm volatile("wfi");
+    } else {
+      int winner = rand() % active_tickets;
+
+      // race condition: process state might have changed away from RUNNABLE
+      // last process in list has *slightly* higher chance of being selected
+      int cur_tickets = 0;
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          cur_tickets += p->tickets;
+          if (cur_tickets > winner) {
+            release(&ticket_lock);
+
+            // Switch to chosen process.  It is the process's job
+            // to release its lock and then reacquire it
+            // before jumping back to us.
+            p->state = RUNNING;
+            p->ticks++;
+            c->proc = p;
+            swtch(&c->context, &p->context);
+
+            // Process is done running for now.
+            // It should have changed its p->state before coming back.
+            c->proc = 0;
+            release(&p->lock);
+
+            goto done;
+          }
+        }
+        release(&p->lock);
+      }
+      release(&ticket_lock);
+
+      done:;
     }
   }
 }
@@ -705,6 +734,7 @@ procdump(void)
 int
 fill_proc_info(uint64 addr) {
     struct pstat stat;
+    int total_tickets = 0;
     for (int i = 0; i < NPROC; i++) {
         struct proc *p = &proc[i];
         if (p->state != UNUSED) {
@@ -712,6 +742,7 @@ fill_proc_info(uint64 addr) {
             stat.tickets[i] = p->tickets;
             stat.pid[i] = p->pid;
             stat.ticks[i] = p->ticks;
+            total_tickets += p->tickets;
         } else {
             stat.inuse[i] = 0;
             stat.tickets[i] = 0;
@@ -719,5 +750,19 @@ fill_proc_info(uint64 addr) {
             stat.ticks[i] = 0;
         }
     }
+    stat.total_tickets = total_tickets;
     return either_copyout(1, addr, &stat, sizeof(stat));
+}
+
+int
+set_cur_tickets(int tickets) {
+    if (tickets <= 0) {
+        return -1;
+    }
+
+    struct proc *p = myproc();
+    acquire(&ticket_lock);
+    p->tickets = tickets;
+    release(&ticket_lock);
+    return 0;
 }

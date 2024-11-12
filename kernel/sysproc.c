@@ -97,12 +97,7 @@ sys_set_tickets(void)
 {
     int n;
     argint(0, &n);
-    if (n <= 0) {
-        return -1;
-    } else {
-        myproc()->tickets = n;
-        return 0;
-    }
+    return set_cur_tickets(n);
 }
 
 uint64
